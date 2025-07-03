@@ -3,114 +3,126 @@ orgID is an API that turns text strings describing academic entities ("affliatio
 
 # API endpoints
 
-
-## GET /entities/institutions
-Get a list of matching institution IDs from a text string. 
+## GET /institutions
+Get a list of matching Institution objects from an affiliation string. 
 
 ### Parameters
 
 * Query parameters:
-  * `query`: The text string match against.
+  * `affiliation_string`: The affiliation string to match against.
 
 ### Response
 
-* `query`: The original query
-* `entities`: A list of Institution objects for that query. Note this is a list, because each query string can have multiple institution matches in it.
+* `result`: A Result object
 
-### How it works
+
+## POST /institutions
+Get a list of matching Institution objects from a list of affiliation strings. 
+
+### Parameters
+
+* Request body:
+  * `affiliation_strings`: A list of affiliation strings to match against.
+
+### Response
+
+* `results`: A list of Result objects
+
+
+## GET /tests-results/:status
+Tests the /institutions endpoint using the data in the gold standard CSV, and resport results.
+
+### Parameters
+* URL parameters:
+  * `status` (optional): The status of the test results to display. Possible values: `match`, `precision_error`, `recall_error`
+
+### Response
+A list of TestResult objects, filtered by the `status` parameter.
+
+### notes
+See the Testing section below for more details.
+
+
+
+## Creation of lookup table
+
+We create a lookup table in memory when the app boots. This lookup table is a dictionary:
+*Key:* A normalized institution name (using the `normalize()` function). There is exactly one key for every normalized institution name string. There will be way more keys than institutions, since most institutions have multiple names.
+*Value:* a list (of length 1-many) of institutions (with their ROR IDs, OpenAlex IDs, and geonames) that match this key.
+
+ We also create a reverse lookup table where the key is the ROR ID and the value is the Institution object.
+
+## Tokenization using `tokenize()`
+
+Since each query string can contain multiple institutions, we split the query string into tokens, where each token represents a _single potential institution_. We won't know if a token is a real institution until we look it up; that comes later. This is just finding _potential_ institutions.  Here's the tokenization function, which we'll call `tokenize()`. It proceeds in order as follows:
+
+1. words in all-uppercase become tokens and are removed from the string.
+2. Words or phrases within parantheses become tokens and are removed from the string (parentheses are discarded).
+3. The rest of the string is split on dividers. These are the dividers: commas, semicolons, and any type of dash or hyphen (em dash, en dash, etc). 
+
+Once we've got our tokens, we remove any tokens shorter than 3 characters, because there's not enough information in them to create a confident match.
+
+## Normalizing tokens using `normalize()`
+
+We normalize each token to make it easier to look up. Here's the normalization function, which we'll call `normalize()`. For each token, we:
+
+1. Trim whitespace from the start and end of the string. (e.g. `  MIT  ` becomes `MIT`)
+2. Collapse all repeated whitespace to a single space. (e.g. `univ   florida` becomes `univ florida`)
+3. Lowercase all characters _unless the word is all-uppercase_ (e.g. `Florida` becomes `florida` but `MIT` stays `MIT`).
+4. Remove all punctuation.
+5. Where possible, replace accented characters with their unaccented equivalents. (e.g. `é` becomes `e`)
+
+## Matching tokens to institutions
+
+For each normalized token, we look up the institution in the in-memory lookup table. We'll find that the token matches 0, 1, or >1 institutions. 
+
+What we do next depends on the number of matches:
+* 0 matched institutions: We move on to the next token.
+* 1 matched institution: We add this institution to the list of matching Institutions that will be returned
+* >1 matched institutions: We use the geonames found in the overall affiliation string to narrow down the list of matched institutions. See the Geonames section of this document for more details.
 
 ### Geocoding
-We use the Python flashgeotext library to find geonames in the query string. We save these for later. Geonames are often scattered all over the string, so we can't connect them to tokens unfortunately, but they can still be useful for disambiguating common institution names.
+Affiliation strings often include geonames (country, city, etc). These are super useful for disambiguation, but they are scattered sort of randomly throughout the string, so we can't connect them to tokens.
 
-#### Tokenization
-We split the query string into tokens. Each token represents a potential institution name. Here's the tokenization:
-  1. words in all-uppercase become tokens and are removed from the string.
-  2. Words or phrases within parantheses become tokens and are removed from the string (parentheses are discarded).
-  3. The rest of the string is split on commas, semicolons, and any type of dash or hyphen (em dash, en dash, etc). 
-  4. Remove any tokens shorter than 3 chars.
+In affiliation strings, various geonames are often scattered all over the string. so we can't connect them to tokens unfortunately, but they can still be useful for disambiguating common institution names.
 
-#### Normalization
+Sometimes a given token might match multiple institutions. In that case, we use the geonames found in the overall affiliation string to narrow down the list of matched institutions, in the hopes that we can narrow it down to a single match.
 
-For each token, we:
-1. Collapse all whitespace to a single space.
-2. Lowercase all characters unless the word is all-uppercase.
-3. Remove all punctuation.
-4. Replace all accented characters with their unaccented equivalents.
+For each institution that matched, we look for a match between any of the geonames found in the overall affiliation string, and the location_name, country_subdivision_name, or country_name of each institution, as found in the lookup table. If there's exactly one match, we use that institution. If there's more than one match, we skip this token.
 
-#### Institution lookup
-For each normalized token, we look up the institution in the in-memory lookup table. What we do next depends on the number of matches:
-* 0 matches: We skip this token.
-* 1 match: We add this institution to the list of matching Institutions that will be returned to the user
-* >1 match: look for a match between any of the geonames found in the overall affiliation string, and the location_name, country_subdivision_name, or country_name of each institution. If there's one match, we use that institution. If there's more than one match, we skip this token.
+For example, let's say we have the following affiliation string: "MIT, Cambridge, USA". The token "MIT" matches two institutions: Mumbai Institute of Technology and Massachusetts Institute of Technology, so we're kind of stuck...which should we pick? Well, we can use the geonames found in the overall affiliation string to narrow it down. The geonames found in the overall affiliation string are "Cambridge" and "USA". 
 
+In our lookup table, we see that Massachusetts Institute of Technology has "Cambridge" as its location_name, but Mumbai Institute of Technology doesn't. So we use Massachusetts Institute of Technology.
 
-## POST /entities/institutions
-Same as GET /entities/institutions, but in a batch.
+## Testing
 
-### Parameters
+We test the system under test (SUT) against the gold standard included as CSV data in the app. The gold standard is a list of in-out pairs: an affiliation string (in) with expected institution IDs (out). Because some some affilation strings contain multiple institutions, there are often mulitple in-out pairs with the same affiliation string.
 
-none
+We run the tests all together, like this: 
 
-### Request body
+1. We load the gold standard CSV data into memory.
+2. We make a list of all the _unique_ affiliation strings in the gold standard.
+3. We iterate over this list of unique affiliation strings, running the `/institutions` endpoint (SUT) for each one. 
+4. We save all the SUT results as a list of SUT in-out pairs. Since some affiliation strings will return multiple institutions, naturally these generate  _multiple_ SUT in-out pairs. 
+5. We compare the SUT in-out pairs with the gold standard in-out pairs, and report the results as a list of TestResult objects. We hydrate the TestResult objects by converting IDs to Institution objects using the reverse lookup table...this makes the results more useful for debugging.
 
-* `queries`: A list of text strings to match against.
+There are three types of TestResult objects, corresponding to the value of the `status` field:
 
-### Response
+| `status`  | description | pos/neg |
+| --- | --- | --- |
+| `match` | in both SUT results and gold standard | true positive |
+| `precision_error` | in SUT results but not gold standard | false positive |
+| `recall_error` | in gold standard but not SUT results | false negative |
 
-* `queries`: A list of queries with their matches
-  * `query`: The original query
-  * `geonames`: A list of geonames found in the overall affiliation string
-  * `matches`: A list describing matching institutions
-    * `token`: The token we matched on
-    * `institution`: The matching Institution object
-    * `is_token_unique`: A boolean indicating whether the token was unique, or if there were multiple institutions that matched
-
-
-## POST /tests/:dataset
-Run a batch of tests from a particular dataset.
-
-### Parameters
-
-* `dataset`: The dataset of tests to use, as defined in the "dataset" column of the tests csv.
-
-### Request body
-
-* `tests`: A list of tests to run.
-  * `id`: The ID of the test.
-  * `query`: The text string to match against.
-  * `expected_entities`: A list of expected Institution objects.
-
-### Response
-
-* `meta`:
-  * `total`: The total number of tests run
-  * `passing`: The number of passing tests
-  * `failing`: The number of failing tests
-  * `performance`: A dictionary of performance metrics
-    * `percentage_passing`: The percentage of passing tests
-    * `precision`: The precision of the tests
-    * `recall`: The recall of the tests
-  * `timing`: A dictionary of timing metrics
-    * `total`: The total time taken to run the tests
-    * `setup`: The time taken to setup the tests
-    * `per_test`: The average time taken per test. This doesn't include setup time. 
-* `results`: A list of Test objects
-
-### How it works
-When the test endpoint is called, it:
-1. Pulls all the tests from a CSV here: https://docs.google.com/spreadsheets/d/e/2PACX-1vR_sVx4ts9ndZJ6UP8mPqKd-Rw_v-_A_ShaIvgIE4QhmdPeNb5H7GUPZIBZiMEXvLax1iAChlH6Mk6W/pub?output=csv. Don't save the tests anywhere; load them fresh every time the endpoint is called.
-2. Filters the tests to run only the ones from the specified dataset.
-3. Runs each test by calling the same function used by `GET /entities/institutions`
-4. Returns the results. The expected entities are hydrated into Institution objects using data from the ror_with_openalex.csv file.
-
+ We use the `/tests-results/:status` endpoint to get a list of test results, filtered by the `status` parameter. 
 
 
 # API objects
 
-## QueryResult
+## Result
 
-* `query`: The original query
-* `geonames`: A list of geonames found in the overall affiliation string
+* `affiliation_string`: The submitted affiliation string that we matched against
+* `geonames`: A list of geonames found in the submitted affiliation string
 * `matches`: A list describing matching institutions
   * `token`: The token we matched on
   * `institution`: The matching Institution object
@@ -119,30 +131,20 @@ When the test endpoint is called, it:
 ## Institution
 
 * `id`: The OpenAlex ID of the institution
-* `name`: The name of the institution
+* `name`: The primary display name of the institution
 * `ror`: The ROR ID of the institution
 * `alternate_names`: A list of alternate names for the institution
 
 
-## Test
+## TestResult
 
-* `id`: The ID of the test
-* `query`: The original query
-* `is_passing`: A boolean indicating whether the test passed
-* `results`:
-  * `correct`: A list of QueryResult objects that matched the expected institution
-  * `overmatched`: A list of QueryResult objects that did NOT match the expected institution
-  * `undermatched`: A list of Institution objects that should have been matched, but weren't
+* `test_id`: The ID of the test
+* `affiliation_string`: The original affiliation string (in).
+* `sut_institution`: An Institution object from the SUT. `null` if `status` is `recall_error`
+* `gold_standard_institution`: The Institution object from the gold standard. `null` if `status` is `precision_error`
+* `status`: A string indicating whether the SUT institution matches the gold standard institution. See the table in the Testing section for more details.
 
 
-  ## Key functions
-
-  ### normalize(str)
-  Normalize a string by:
-  1. Collapsing all whitespace to a single space.
-  2. Lowercasing all characters unless the word is all-uppercase.
-  3. Removing all punctuation.
-  4. Replacing all accented characters with their unaccented equivalents.
 
 
 
