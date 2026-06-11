@@ -17,7 +17,7 @@ Get a list of matching Institution objects from an affiliation string.
 
 
 ## POST /institutions
-Get a list of matching Institution objects from a list of affiliation strings. 
+Get a list of matching Institution objects from a list of affiliation strings. Same as GET /institutions, but for a _list_ of affiliation strings.
 
 ### Parameters
 
@@ -146,17 +146,5 @@ There are three types of TestResult objects, corresponding to the value of the `
 
 
 
-
-
-# App boot
-
-When the app boots, it builds a few dictionaries as lookup tables in memory: 
-* `normalized_name_to_ror_id`: 
-  * key: The normalized name of the institution (using the `normalize` function)
-  * value: A list of ROR IDs that match that name
-* `ror_id_to_record`: 
-  * key: The ROR ID of the institution
-  * value: The Institution object
-
 # Stack
-The app is build in Python 3, using the FastAPI framework. The app is deployed on Vercel
+The app is build in Python 3, using the FastAPI framework. The app is deployed on Heroku.
